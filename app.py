@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Reddit Referral Poster (Pro v2, ToS-friendly)
+Reddit Referral Poster (Pro v2, ToS-friendly, fixed)
 - OAuth web login (no password). Refresh token stored in memory for demo.
 - Drip scheduling and limits.
 - CSV export of logs.
 - Subreddit rule check: auto-skips subs forbidding referrals/self-promo; prefers megathreads or enforces megathread-only.
 - Presets for common programs.
-- **Natural copy variation engine**: template spins, synonyms, disclaimers (optional), emoji usage control.
+- Natural copy variation engine (openers/CTAs/closers/synonyms/tones/emojis/mod disclaimer).
 - Deployable to Render/Replit/Docker.
 """
+
 import os
 import csv
 import io
@@ -17,12 +18,14 @@ import time
 import random
 import threading
 import datetime as dt
-from typing import List, Dict, Optional
-from urllib.parse import urlencode
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session, Response, send_from_directory, abort
+from typing import List, Dict
+from flask import (
+    Flask, render_template, request, jsonify, redirect,
+    url_for, session, Response, send_from_directory, abort
+)
 from flask_cors import CORS
 import praw
-import prawcore
+import prawcore  # <— modern prawcore import (no Unauthorized symbol)
 
 # ---- Configuration via env ----
 SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
@@ -54,11 +57,13 @@ def _log(level: str, event: str, **kwargs):
 
 # ---- Rules heuristics ----
 PROHIBIT_PATTERNS = [
-    "no referrals", "no referral", "no codes", "no promo codes", "no self-promotion", "no self promotion",
-    "referrals not allowed", "no affiliate", "no affiliate links"
+    "no referrals", "no referral", "no codes", "no promo codes",
+    "no self-promotion", "no self promotion", "referrals not allowed",
+    "no affiliate", "no affiliate links"
 ]
 MEGATHREAD_REQUIRED_PATTERNS = [
-    "referrals only in", "referrals allowed only in", "post referrals only in", "megathread", "weekly thread"
+    "referrals only in", "referrals allowed only in",
+    "post referrals only in", "megathread", "weekly thread"
 ]
 
 DEFAULT_ALLOWLIST = [
@@ -167,7 +172,7 @@ def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[s
     for s in allowlist:
         try:
             sr = reddit.subreddit(s)
-            disallow, mega_only, memo = rules_disallow_referrals(sr)
+            disallow, mega_only, _ = rules_disallow_referrals(sr)
             q_terms = brand_terms + generic_terms
             query = " OR ".join([f'title:"{t}"' for t in q_terms if t])
             for subm in sr.search(query or "referral", sort="new", time_filter="year", limit=50):
@@ -190,7 +195,7 @@ def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[s
                 s = sr.display_name
                 if any(s.lower() == a.lower() for a in allowlist):
                     continue
-                disallow, mega_only, memo = rules_disallow_referrals(sr)
+                disallow, mega_only, _ = rules_disallow_referrals(sr)
                 q_terms = brand_terms + generic_terms
                 query = " OR ".join([f'title:"{t}"' for t in q_terms if t])
                 try:
@@ -220,19 +225,16 @@ SYNONYMS = {
     "hope_helps": ["hope this helps", "hope this is useful", "might help someone"],
     "link_phrase": ["Here’s the link", "Direct link", "Sign-up link", "My link"],
 }
-
 CTA_TEMPLATES = [
     "{get} {discount}% off your {first_order} — {use_code} {code} {at_checkout}.",
     "Score {discount}% off your {first_order} with code {code} {at_checkout}.",
     "{get} {discount}% off: code {code} {at_checkout}.",
 ]
-
 OPENERS = [
     "{hey}! {brand} {delivers} alcohol, food, drinks and {more} in ~30 minutes.",
     "{hey}! If you’re trying {brand} for the first time, this might help.",
     "{hey}! Sharing a {brand} referral that helped me recently:",
 ]
-
 CLOSERS = [
     "{hope_helps}. {link_phrase}: {link}",
     "{link_phrase}: {link} — {hope_helps}.",
@@ -260,46 +262,40 @@ def spin_template(tmpl: str, brand: str, code: str, link: str, discount: int) ->
         discount=discount,
     )
 
-def generate_variant(base_message: str, brand: str, code: str, link: str, discount: int, tone: str, emoji_level: str, add_disclaimer: bool) -> str:
-    """Build one varied message around a base message. Will include the base text occasionally to avoid synthetic feel."""
+def generate_variant(base_message: str, brand: str, code: str, link: str, discount: int,
+                     tone: str, emoji_level: str, add_disclaimer: bool) -> str:
     parts = []
 
     # 40% chance to include base message at top
-    if random.random() < 0.4 and base_message.strip():
+    if random.random() < 0.4 and (base_message or "").strip():
         parts.append(base_message.strip())
 
-    # Opener + CTA
+    # Opener + CTA + Closer
     opener = spin_template(random.choice(OPENERS), brand, code, link, discount)
     cta = spin_template(random.choice(CTA_TEMPLATES), brand, code, link, discount)
-
-    # Closer
     closer = spin_template(random.choice(CLOSERS), brand, code, link, discount)
 
-    # Tone shaping
     if tone == "concise":
-        # Concise keeps it short
         msg = f"{cta}\n\n{link}"
     elif tone == "friendly":
         msg = f"{opener}\n\n{cta}\n\n{closer}"
     else:  # helpful
-        msg = f"{opener}\n\n{cta}\n\nIf you don’t see the code field, sign up first, then add it {spin_piece('at_checkout')}. {closer}"
+        msg = (
+            f"{opener}\n\n{cta}\n\n"
+            f"If you don’t see the code field, sign up first, then add it {spin_piece('at_checkout')}. {closer}"
+        )
 
     parts.append(msg)
 
-    # Disclaimer for mods
     if add_disclaimer:
         parts.append("Mods: if this isn’t allowed here, please remove — no worries.")
 
     final = "\n\n".join(parts)
 
-    # Emoji usage
     if emoji_level == "low":
-        # sprinkle a single emoji sometimes
         if random.random() < 0.35:
             final += " 🙂"
-    elif emoji_level == "none":
-        pass
-    else:  # normal
+    elif emoji_level == "normal":
         if random.random() < 0.2:
             final += " 🚚"
 
@@ -314,24 +310,27 @@ def drip_worker(config: Dict):
     seen_targets = {}
     per_sub_counts = {}
 
-try:
-    me = str(reddit.user.me())
-    STATE["last_login_user"] = me
-    _log("info", "auth_ok", user=me)
-except prawcore.exceptions.OAuthException as e:
-    _log("error", "auth_failed", reason="OAuthException", detail=str(e))
-    STATE["running"] = False
-    return
-except prawcore.exceptions.PrawcoreException as e:
-    _log("error", "auth_failed", reason="PrawcoreException", detail=str(e))
-    STATE["running"] = False
-    return
+    try:
+        if config.get("random_seed"):
+            random.seed(int(config["random_seed"]))
 
+        reddit = build_reddit(read_only=False)
+        try:
+            me = str(reddit.user.me())
+            STATE["last_login_user"] = me
+            _log("info", "auth_ok", user=me)
+        except prawcore.exceptions.OAuthException as e:
+            _log("error", "auth_failed", reason="OAuthException", detail=str(e))
+            STATE["running"] = False
+            return
+        except prawcore.exceptions.PrawcoreException as e:
+            _log("error", "auth_failed", reason="PrawcoreException", detail=str(e))
+            STATE["running"] = False
+            return
 
         # Inputs
-        base_message = config["message"]
+        base_message = config.get("message", "")
         brand = (config.get("brand") or "").strip()
-        # Extract code/link/discount by simple heuristics, with UI overrides
         code = (config.get("ref_code") or "").strip()
         link = (config.get("ref_link") or "").strip()
         try:
@@ -339,8 +338,8 @@ except prawcore.exceptions.PrawcoreException as e:
         except Exception:
             discount = 0
 
-        tone = config.get("tone", "friendly")  # concise|friendly|helpful
-        emoji_level = config.get("emoji_level", "low")  # none|low|normal
+        tone = config.get("tone", "friendly")          # concise | friendly | helpful
+        emoji_level = config.get("emoji_level", "low") # none | low | normal
         add_disclaimer = bool(config.get("add_disclaimer", True))
 
         brand_terms = [t.strip() for t in (config.get("brand_terms") or "").split(",") if t.strip()]
@@ -378,10 +377,11 @@ except prawcore.exceptions.PrawcoreException as e:
                 _log("info", "end_time_reached")
                 break
 
-            # Build candidates
+            # Gather candidates
             candidates = []
-            for s, submission, disallow, mega_only in find_candidate_threads(reddit, brand_terms, generic_terms, allowlist, days_back):
-                # Skip by rules
+            for s, submission, disallow, mega_only in find_candidate_threads(
+                reddit, brand_terms, generic_terms, allowlist, days_back
+            ):
                 if disallow:
                     _log("info", "skip_rules_disallow", sub=s, title=submission.title)
                     continue
@@ -399,7 +399,7 @@ except prawcore.exceptions.PrawcoreException as e:
                 time.sleep(5)
                 continue
 
-            # Pick a candidate
+            # Pick one
             s, submission = random.choice(candidates)
             key = f"{s}_{submission.id}"
             seen_targets[key] = True
@@ -422,7 +422,6 @@ except prawcore.exceptions.PrawcoreException as e:
             except Exception as e:
                 _log("error", "post_failed", sub=s, title=title, error=repr(e))
 
-            # Sleep
             delay = cadence_seconds + random.randint(0, jitter)
             _log("info", "sleep", seconds=delay)
             time.sleep(delay)
@@ -436,8 +435,13 @@ except prawcore.exceptions.PrawcoreException as e:
 def index():
     presets = sorted(PRESETS.keys())
     use_oauth_ready = bool(REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET and REDDIT_REDIRECT_URI)
-    return render_template("index.html", presets=presets, use_oauth_ready=use_oauth_ready,
-                           logged_in=bool(STATE["refresh_token"]), user=STATE.get("last_login_user"))
+    return render_template(
+        "index.html",
+        presets=presets,
+        use_oauth_ready=use_oauth_ready,
+        logged_in=bool(STATE["refresh_token"]),
+        user=STATE.get("last_login_user")
+    )
 
 @app.route("/presets.json")
 def presets_json():
@@ -487,10 +491,8 @@ def start():
         return jsonify({"ok": False, "error": "Not logged in via Reddit OAuth."}), 401
 
     data = request.json or {}
-    required = ["message"]
-    missing = [r for r in required if not data.get(r)]
-    if missing:
-        return jsonify({"ok": False, "error": f"Missing fields: {', '.join(missing)}"}), 400
+    if not data.get("message"):
+        return jsonify({"ok": False, "error": "Missing field: message"}), 400
 
     t = threading.Thread(target=drip_worker, args=(data,), daemon=True)
     t.start()
@@ -514,10 +516,13 @@ def progress():
 @app.route("/export.csv")
 def export_csv():
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["ts","level","event","sub","title","url","comment_id","error","seconds","user","count"]);
+    writer = csv.DictWriter(
+        output,
+        fieldnames=["ts","level","event","sub","title","url","comment_id","error","seconds","user","count"]
+    )
     writer.writeheader()
     for row in STATE["logs"]:
-        writer.writerow({k: row.get(k,"") for k in writer.fieldnames})
+        writer.writerow({k: row.get(k, "") for k in writer.fieldnames})
     csv_data = output.getvalue()
     return Response(
         csv_data,
