@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Reddit Referral Poster — Pro v2.1
+Reddit Referral Poster — Pro v2.1 (responsive stop + UI sync)
 
 - OAuth web login (Reddit "web app" credentials).
-- Drip scheduler: start immediately; stop after `duration_minutes`.
+- Starts immediately; ends after `duration_minutes`.
 - Rule checks: prefers megathreads; skips subs forbidding referrals.
-- Natural copy variation; auto-generates message when base text is empty.
-- CSV export; progress API includes "stopping" state.
-
-Environment variables (Render):
-  FLASK_SECRET
-  REDDIT_CLIENT_ID
-  REDDIT_CLIENT_SECRET
-  REDDIT_REDIRECT_URI   (e.g., https://reddit-ref-poster.onrender.com/oauth/callback)
-  USER_AGENT            (e.g., reddit-ref-poster v2 by u/YourUser)
+- Auto-generates message when base text is empty; copy variation engine.
+- CSV export; progress API includes "stop_requested".
 """
 
 import os
@@ -33,7 +26,7 @@ from flask import (
 from flask_cors import CORS
 
 import praw
-import prawcore  # modern prawcore (no Unauthorized symbol)
+import prawcore
 
 # -------------------- Config --------------------
 
@@ -62,10 +55,8 @@ def _log(level: str, event: str, **kwargs):
     entry = {"level": level, "event": event, "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
     entry.update(kwargs)
     STATE["logs"].append(entry)
-    # keep last ~2000 lines
     if len(STATE["logs"]) > 2000:
         STATE["logs"] = STATE["logs"][-2000:]
-
 
 # -------------------- Heuristics / Presets --------------------
 
@@ -277,17 +268,22 @@ def generate_variant(base: str, brand: str, code: str, link: str, discount: int,
         parts.append("Mods: if this isn’t allowed here, please remove — no worries.")
 
     final = "\n\n".join(parts)
-
     if emoji_level == "low":
-        if random.random() < 0.35:
-            final += " 🙂"
+        if random.random() < 0.35: final += " 🙂"
     elif emoji_level == "normal":
-        if random.random() < 0.2:
-            final += " 🚚"
-
+        if random.random() < 0.2: final += " 🚚"
     return final.strip()
 
-# -------------------- Worker --------------------
+# -------------------- Worker (interruptible sleep) --------------------
+
+def _interruptible_sleep(seconds: int) -> bool:
+    """Sleep up to `seconds`, checking stop flag every 1s.
+    Returns True if a stop was requested during the wait."""
+    for _ in range(max(1, int(seconds))):
+        if STATE.get("stop_requested"):
+            return True
+        time.sleep(1)
+    return False
 
 def drip_worker(config: Dict):
     STATE["running"] = True
@@ -381,7 +377,9 @@ def drip_worker(config: Dict):
                 candidates.append((s, submission))
 
             if not candidates:
-                time.sleep(5)
+                if _interruptible_sleep(5):
+                    _log("warn", "stop_requested")
+                    break
                 continue
 
             s, submission = random.choice(candidates)
@@ -417,12 +415,13 @@ def drip_worker(config: Dict):
 
             delay = cadence_seconds + random.randint(0, jitter)
             _log("info", "sleep", seconds=delay)
-            time.sleep(delay)
+            if _interruptible_sleep(delay):
+                _log("warn", "stop_requested")
+                break
 
     finally:
         STATE["running"] = False
         _log("info", "job_done", running=False)
-
 
 # -------------------- Routes --------------------
 
