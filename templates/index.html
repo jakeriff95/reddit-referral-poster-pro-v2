@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reddit Referral Poster Pro v2</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; }
+    input, textarea, select { width: 100%; padding: .6rem; margin: .25rem 0 .75rem; }
+    label { font-weight: 600; }
+    button { padding: .6rem 1rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #ddd; padding: .5rem; font-size: .9rem; }
+    th { background: #f6f6f6; text-align: left; }
+    .ok { color: #0a7; }
+    .warn { color: #c80; }
+    .err { color: #c00; }
+    .muted { color: #666; }
+    .pill { display:inline-block; background:#eef; padding:.1rem .4rem; border-radius:.5rem; margin-left:.5rem; }
+    .status { margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Reddit Referral Poster <small class="pill">Pro v2</small></h1>
+  <div class="status">
+    <span id="authStatus">Auth: <em>checking…</em></span>
+    <span id="userName" class="pill"></span>
+    <button id="loginBtn">Login with Reddit</button>
+    <button id="logoutBtn">Logout</button>
+  </div>
+
+  <div class="row">
+    <div>
+      <h3>Referral Message</h3>
+      <label for="preset">Preset</label>
+      <select id="preset"></select>
+
+      <label for="message">Base message (optional)</label>
+      <textarea id="message" rows="6" placeholder="Paste a base message here (it may be included ~40% of the time)"></textarea>
+
+      <label for="brand">Brand/Program</label>
+      <input id="brand" placeholder="e.g., gopuff" />
+
+      <div class="row-3">
+        <div>
+          <label for="ref_code">Referral code</label>
+          <input id="ref_code" placeholder="e.g., GOMXENXJKX" />
+        </div>
+        <div>
+          <label for="discount">Discount %</label>
+          <input id="discount" type="number" placeholder="e.g., 60" />
+        </div>
+        <div>
+          <label for="ref_link">Referral link</label>
+          <input id="ref_link" placeholder="https://..." />
+        </div>
+      </div>
+
+      <label for="brand_terms">Brand keywords (comma-separated)</label>
+      <input id="brand_terms" placeholder="gopuff, delivery, alcohol, food, drinks" />
+
+      <label for="generic_terms">Generic referral keywords (comma-separated)</label>
+      <input id="generic_terms" placeholder="referral, referral code, promo code, coupon, megathread" />
+
+      <label for="allowlist">Subreddit allowlist (comma-separated)</label>
+      <input id="allowlist" placeholder="ReferralCodes, ReferAFriend, SignUpBonuses" />
+
+      <label><input id="only_megathreads" type="checkbox" checked /> Only post in megathreads / referral threads</label>
+      <label><input id="dry_run" type="checkbox" /> Dry run (don’t post)</label>
+    </div>
+    <div>
+      <h3>Style & Scheduling</h3>
+      <div class="row-3">
+        <div>
+          <label for="tone">Tone</label>
+          <select id="tone">
+            <option value="friendly" selected>Friendly</option>
+            <option value="concise">Concise</option>
+            <option value="helpful">Helpful</option>
+          </select>
+        </div>
+        <div>
+          <label for="emoji_level">Emoji usage</label>
+          <select id="emoji_level">
+            <option value="low" selected>Low</option>
+            <option value="none">None</option>
+            <option value="normal">Normal</option>
+          </select>
+        </div>
+        <div>
+          <label for="add_disclaimer">Disclaimer</label>
+          <select id="add_disclaimer">
+            <option value="true" selected>On</option>
+            <option value="false">Off</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row-3">
+        <div>
+          <label for="start_at">Start at (ISO)</label>
+          <input id="start_at" placeholder="2025-08-08T12:00:00" />
+        </div>
+        <div>
+          <label for="end_at">End at (ISO)</label>
+          <input id="end_at" placeholder="2025-08-09T12:00:00" />
+        </div>
+        <div>
+          <label for="posts_per_hour">Posts per hour</label>
+          <input id="posts_per_hour" type="number" step="0.1" value="1" />
+        </div>
+      </div>
+
+      <div class="row-3">
+        <div>
+          <label for="jitter_seconds">Jitter seconds</label>
+          <input id="jitter_seconds" type="number" value="45" />
+        </div>
+        <div>
+          <label for="per_sub_limit">Max comments per subreddit</label>
+          <input id="per_sub_limit" type="number" value="1" />
+        </div>
+        <div>
+          <label for="max_total_posts">Max total comments</label>
+          <input id="max_total_posts" type="number" value="10" />
+        </div>
+      </div>
+
+      <div class="row-3">
+        <div>
+          <label for="days_back">Days back to search</label>
+          <input id="days_back" type="number" value="60" />
+        </div>
+        <div>
+          <label for="random_seed">Random seed (optional)</label>
+          <input id="random_seed" placeholder="e.g., 42" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="startBtn">Start</button>
+        </div>
+      </div>
+
+      <button id="stopBtn">Stop</button>
+      <button id="exportBtn">Export CSV</button>
+    </div>
+  </div>
+
+  <h3>Progress</h3>
+  <div id="summary"></div>
+  <table id="logTable">
+    <thead><tr><th>Time</th><th>Level</th><th>Event</th><th>Details</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    let presets = {};
+    async function loadPresets() {
+      const res = await fetch('/presets.json');
+      presets = await res.json();
+      const sel = document.getElementById('preset');
+      sel.innerHTML = '<option value="">(none)</option>' + Object.keys(presets).map(p => `<option value="${p}">${p}</option>`).join('');
+      sel.addEventListener('change', () => {
+        const p = presets[sel.value];
+        if (!p) return;
+        document.getElementById('brand').value = p.brand || '';
+        document.getElementById('brand_terms').value = (p.brand_terms || []).join(', ');
+        document.getElementById('generic_terms').value = (p.generic_terms || []).join(', ');
+        document.getElementById('allowlist').value = (p.allowlist || []).join(', ');
+      });
+    }
+
+    async function checkAuth() {
+      const res = await fetch('/progress');
+      const data = await res.json();
+      const authSpan = document.getElementById('authStatus');
+      const userSpan = document.getElementById('userName');
+      if (data.logged_in) {
+        authSpan.innerHTML = 'Auth: <b>Logged in</b>';
+        userSpan.textContent = data.user ? ('u/' + data.user) : '';
+      } else {
+        authSpan.innerHTML = 'Auth: <b>Not logged in</b>';
+        userSpan.textContent = '';
+      }
+    }
+
+    async function startJob() {
+      const payload = {
+        message: document.getElementById('message').value,
+        brand: document.getElementById('brand').value,
+        ref_code: document.getElementById('ref_code').value,
+        discount: document.getElementById('discount').value,
+        ref_link: document.getElementById('ref_link').value,
+        brand_terms: document.getElementById('brand_terms').value,
+        generic_terms: document.getElementById('generic_terms').value,
+        allowlist: document.getElementById('allowlist').value,
+        days_back: document.getElementById('days_back').value,
+        per_sub_limit: document.getElementById('per_sub_limit').value,
+        max_total_posts: document.getElementById('max_total_posts').value,
+        posts_per_hour: document.getElementById('posts_per_hour').value,
+        jitter_seconds: document.getElementById('jitter_seconds').value,
+        start_at: document.getElementById('start_at').value,
+        end_at: document.getElementById('end_at').value,
+        only_megathreads: document.getElementById('only_megathreads').checked,
+        dry_run: document.getElementById('dry_run').checked,
+        tone: document.getElementById('tone').value,
+        emoji_level: document.getElementById('emoji_level').value,
+        add_disclaimer: document.getElementById('add_disclaimer').value === 'true',
+        random_seed: document.getElementById('random_seed').value,
+      };
+      const res = await fetch('/start', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json();
+      if (!data.ok) alert('Error: ' + data.error);
+    }
+
+    async function stopJob() {
+      await fetch('/stop', {method:'POST'});
+    }
+
+    async function exportCsv() {
+      window.location.href = '/export.csv';
+    }
+
+    async function poll() {
+      const res = await fetch('/progress');
+      const data = await res.json();
+
+      // summary
+      const sumEl = document.getElementById('summary');
+      const parts = [];
+      for (const [sub, count] of Object.entries(data.summary || {})) {
+        parts.push(`${sub}: ${count}`);
+      }
+      sumEl.textContent = 'Per-subreddit counts: ' + (parts.join(' | ') || '(none yet)') + (data.running ? ' — Running…' : ' — Idle');
+
+      // logs
+      const tbody = document.querySelector('#logTable tbody');
+      tbody.innerHTML = '';
+      for (const row of (data.logs || []).slice().reverse()) {
+        const tr = document.createElement('tr');
+        const level = row.level || '';
+        const cls = level === 'error' ? 'err' : (level === 'warn' ? 'warn' : 'ok');
+        const details = Object.entries(row).filter(([k,v]) => !['level','event','ts'].includes(k))
+          .map(([k,v]) => `${k}: ${v}`).join(' | ');
+        tr.innerHTML = `<td>${row.ts||''}</td><td class="${cls}">${level}</td><td>${row.event||''}</td><td class="muted">${details}</td>`;
+        tbody.appendChild(tr);
+      }
+
+      // Auth state
+      const authSpan = document.getElementById('authStatus');
+      const userSpan = document.getElementById('userName');
+      if (data.logged_in) {
+        authSpan.innerHTML = 'Auth: <b>Logged in</b>';
+        userSpan.textContent = data.user ? ('u/' + data.user) : '';
+      } else {
+        authSpan.innerHTML = 'Auth: <b>Not logged in</b>';
+        userSpan.textContent = '';
+      }
+    }
+
+    document.getElementById('loginBtn').addEventListener('click', () => { window.location.href = '/oauth/login'; });
+    document.getElementById('logoutBtn').addEventListener('click', () => { window.location.href = '/logout'; });
+    document.getElementById('startBtn').addEventListener('click', startJob);
+    document.getElementById('stopBtn').addEventListener('click', stopJob);
+    document.getElementById('exportBtn').addEventListener('click', exportCsv);
+
+    loadPresets();
+    checkAuth();
+    setInterval(poll, 1500);
+    poll();
+  </script>
+</body>
+</html>
