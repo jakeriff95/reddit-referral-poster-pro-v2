@@ -1,353 +1,204 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Reddit Referral Poster — Pro v2.1</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8">
+  <title>Reddit Referral Poster</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
   <style>
-    :root{--fg:#111;--muted:#666;--bg:#fff;--line:#e7e7e7}
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial}
-    .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
-    h1{display:flex;align-items:center;gap:.6rem;margin:0 0 8px}
-    .tag{font-size:.85rem;font-weight:700;background:#eef;border:1px solid #dbe; padding:.15rem .45rem;border-radius:.5rem;color:#334}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-    .card{border:1px solid var(--line);border-radius:10px;padding:14px;margin:16px 0;background:#fff}
-    label{display:block;font-weight:600;margin:8px 0 6px}
-    input[type="text"],input[type="number"],textarea,select{
-      width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:8px;outline:none
-    }
-    textarea{min-height:110px;resize:vertical}
-    .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr; gap:12px}
-    .btn{cursor:pointer;border:1px solid var(--line);background:#f7f7f7;border-radius:8px;padding:8px 12px}
-    .btn:disabled{opacity:.55;cursor:not-allowed}
-    .btn-primary{background:#0a7; color:white; border-color:#0a7}
-    .btn-danger{background:#c83; color:white; border-color:#c83}
-    .toolbar{display:flex;align-items:center;gap:8px;margin:8px 0 16px}
-    .muted{color:var(--muted)}
-    table{width:100%;border-collapse:collapse;table-layout:fixed}
-    th,td{border-top:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;word-wrap:break-word}
-    th{font-size:.9rem;color:#333;background:#fafafa}
-    .badge{display:inline-block;padding:.25rem .5rem;border-radius:.5rem;font-weight:700}
-    .badge-green{background:#e6f7ec;color:#0a7}
-    .badge-yellow{background:#fff7e6;color:#a87000}
-    .badge-red{background:#ffecec;color:#a40000}
-    .pill{font-size:.85rem}
-    .small{font-size:.9rem}
+    body { padding: 20px; }
+    .log-table { font-size: 0.85rem; }
+    .running-badge { font-weight: bold; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>
-      Reddit Referral Poster
-      <span class="tag">Pro v2.1</span>
-      <span id="runStatus" class="pill badge badge-red">Idle</span>
-    </h1>
 
-    <div class="toolbar">
-      <span class="small">
-        Auth:
-        {% if logged_in %}
-          <strong>Logged in</strong> — <a href="https://www.reddit.com/user/{{ user }}" target="_blank">u/{{ user }}</a>
-        {% else %}
-          <strong>Not logged in</strong>
-        {% endif %}
-      </span>
-      {% if not logged_in %}
-        <a class="btn" href="/oauth/login">Login with Reddit</a>
-      {% else %}
-        <a class="btn" href="/logout">Logout</a>
-      {% endif %}
+<div class="container">
+  <h2 class="mb-4">Reddit Referral Poster</h2>
+
+  {% if not logged_in %}
+    <div class="alert alert-warning">
+      <strong>Not logged in.</strong> Please <a href="{{ url_for('oauth_login') }}">log in with Reddit</a>.
     </div>
+  {% else %}
+    <p>Logged in as <strong>{{ user }}</strong></p>
+  {% endif %}
 
-    <div class="card">
-      <div class="row">
-        <div>
-          <label for="preset">Preset</label>
-          <select id="preset">
-            <option value="">(none)</option>
-            {% for p in presets %}
-              <option value="{{ p }}">{{ p }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="row" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
-          <div>
-            <label for="tone">Tone</label>
-            <select id="tone">
-              <option value="concise">Concise</option>
-              <option value="friendly" selected>Friendly</option>
-              <option value="helpful">Helpful</option>
-            </select>
-          </div>
-          <div>
-            <label for="emoji_level">Emoji usage</label>
-            <select id="emoji_level">
-              <option value="none">None</option>
-              <option value="low" selected>Low</option>
-              <option value="normal">Normal</option>
-            </select>
-          </div>
-          <div>
-            <label for="add_disclaimer">Disclaimer</label>
-            <select id="add_disclaimer">
-              <option value="true" selected>On</option>
-              <option value="false">Off</option>
-            </select>
-          </div>
-        </div>
+  <form id="startForm" class="mb-4">
+    <div class="row mb-2">
+      <div class="col-md-3">
+        <label for="preset" class="form-label">Preset</label>
+        <select id="preset" name="preset" class="form-select">
+          <option value="">Custom</option>
+          {% for p in presets %}
+            <option value="{{ p }}">{{ p|capitalize }}</option>
+          {% endfor %}
+        </select>
       </div>
-
-      <label for="message">Base message (optional)</label>
-      <textarea id="message" placeholder="Leave blank to auto-generate from Brand, Code, Discount, Link."></textarea>
-
-      <div class="grid-3">
-        <div>
-          <label for="brand">Brand/Program</label>
-          <input id="brand" type="text" placeholder="e.g., gopuff" />
-        </div>
-        <div>
-          <label for="ref_code">Referral code</label>
-          <input id="ref_code" type="text" placeholder="e.g., GOMXENXJKX" />
-        </div>
-        <div>
-          <label for="discount">Discount %</label>
-          <input id="discount" type="number" placeholder="e.g., 60" />
-        </div>
+      <div class="col-md-3">
+        <label for="brand" class="form-label">Brand</label>
+        <input type="text" id="brand" name="brand" class="form-control" placeholder="GoPuff">
       </div>
-
-      <label for="ref_link">Referral link</label>
-      <input id="ref_link" type="text" placeholder="https://..." />
-
-      <label for="brand_terms">Brand keywords (comma-separated)</label>
-      <input id="brand_terms" type="text" placeholder="gopuff, alcohol delivery, grocery delivery" />
-
-      <label for="generic_terms">Generic referral keywords (comma-separated)</label>
-      <input id="generic_terms" type="text" placeholder="referral, referrals, referral code, referral codes, promo code, promocodes, coupon code, megathread, weekly megathread" />
-
-      <label for="allowlist">Subreddit allowlist (comma-separated)</label>
-      <input id="allowlist" type="text" placeholder="ReferralCodes, ReferAFriend, ReferralTrains, SignUpBonuses, ReferralLinks, Referrals, Referralcodes, TheReferralHub" />
-
-      <div class="grid-3">
-        <div>
-          <label for="only_megathreads"><input id="only_megathreads" type="checkbox" checked /> Only post in megathreads / referral threads</label>
-        </div>
-        <div>
-          <label for="dry_run"><input id="dry_run" type="checkbox" /> Dry run (don’t post)</label>
-        </div>
-        <div>
-          <label for="random_seed">Random seed (optional)</label>
-          <input id="random_seed" type="number" placeholder="e.g., 42" />
-        </div>
+      <div class="col-md-3">
+        <label for="ref_code" class="form-label">Referral Code</label>
+        <input type="text" id="ref_code" name="ref_code" class="form-control" placeholder="ABC123">
+      </div>
+      <div class="col-md-3">
+        <label for="discount" class="form-label">Discount (%)</label>
+        <input type="number" id="discount" name="discount" class="form-control" placeholder="20">
       </div>
     </div>
 
-    <div class="card">
-      <h3 style="margin:0 0 8px;">Style &amp; Scheduling</h3>
-      <div class="grid-3">
-        <div>
-          <label for="duration_minutes">Duration (minutes)</label>
-          <input id="duration_minutes" type="number" value="60" />
-        </div>
-        <div>
-          <label for="posts_per_hour">Posts per hour</label>
-          <input id="posts_per_hour" type="number" step="0.1" value="1" />
-        </div>
-        <div>
-          <label for="jitter_seconds">Jitter seconds</label>
-          <input id="jitter_seconds" type="number" value="45" />
-        </div>
+    <div class="row mb-2">
+      <div class="col-md-4">
+        <label for="ref_link" class="form-label">Referral Link</label>
+        <input type="url" id="ref_link" name="ref_link" class="form-control" placeholder="https://...">
       </div>
-
-      <div class="grid-3" style="margin-top:12px;">
-        <div>
-          <label for="days_back">Days back to search</label>
-          <input id="days_back" type="number" value="60" />
-        </div>
-        <div>
-          <label for="per_sub_limit">Max comments per subreddit</label>
-          <input id="per_sub_limit" type="number" value="1" />
-        </div>
-        <div>
-          <label for="max_total_posts">Max total comments</label>
-          <input id="max_total_posts" type="number" value="10" />
-        </div>
+      <div class="col-md-4">
+        <label for="message" class="form-label">Base Message (optional)</label>
+        <textarea id="message" name="message" class="form-control" rows="2" placeholder="Leave blank to auto-generate"></textarea>
       </div>
-
-      <div class="toolbar">
-        <button id="startBtn" class="btn btn-primary" onclick="startJob()">Start</button>
-        <button id="stopBtn" class="btn btn-danger" onclick="stopJob()" disabled>Stop</button>
-        <a class="btn" href="/export.csv">Export CSV</a>
-        <span class="muted small">Start begins immediately. End is computed from Duration.</span>
+      <div class="col-md-4">
+        <label for="region" class="form-label">Region</label>
+        <select id="region" name="region" class="form-select">
+          <option value="US" selected>United States</option>
+          <option value="ALL">No restriction</option>
+        </select>
       </div>
     </div>
 
-    <div class="card">
-      <h3 style="margin:0 0 8px;">Progress</h3>
-      <div class="muted small" id="summaryBar">Per-subreddit counts: (none yet) — Idle</div>
-      <div style="overflow:auto; max-height:420px; border:1px solid var(--line); border-radius:8px; margin-top:8px;">
-        <table id="logTable">
-          <thead>
-            <tr>
-              <th style="width:180px;">Time</th>
-              <th style="width:90px;">Level</th>
-              <th style="width:180px;">Event</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody id="logBody"></tbody>
-        </table>
+    <div class="row mb-2">
+      <div class="col-md-2">
+        <label for="days_back" class="form-label">Days Back</label>
+        <input type="number" id="days_back" name="days_back" value="60" class="form-control">
+      </div>
+      <div class="col-md-2">
+        <label for="per_sub_limit" class="form-label">Per Sub Limit</label>
+        <input type="number" id="per_sub_limit" name="per_sub_limit" value="1" class="form-control">
+      </div>
+      <div class="col-md-2">
+        <label for="max_total_posts" class="form-label">Max Total Posts</label>
+        <input type="number" id="max_total_posts" name="max_total_posts" value="10" class="form-control">
+      </div>
+      <div class="col-md-2">
+        <label for="posts_per_hour" class="form-label">Posts per Hour</label>
+        <input type="number" id="posts_per_hour" name="posts_per_hour" value="1" class="form-control">
+      </div>
+      <div class="col-md-2">
+        <label for="jitter_seconds" class="form-label">Jitter (sec)</label>
+        <input type="number" id="jitter_seconds" name="jitter_seconds" value="30" class="form-control">
+      </div>
+      <div class="col-md-2">
+        <label for="duration_minutes" class="form-label">Run Duration (min)</label>
+        <input type="number" id="duration_minutes" name="duration_minutes" value="60" class="form-control">
       </div>
     </div>
+
+    <div class="row mb-2">
+      <div class="col-md-3">
+        <label for="tone" class="form-label">Tone</label>
+        <select id="tone" name="tone" class="form-select">
+          <option value="friendly" selected>Friendly</option>
+          <option value="concise">Concise</option>
+          <option value="detailed">Detailed</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label for="emoji_level" class="form-label">Emoji Level</label>
+        <select id="emoji_level" name="emoji_level" class="form-select">
+          <option value="low">Low</option>
+          <option value="normal" selected>Normal</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Disclaimer</label>
+        <select id="add_disclaimer" name="add_disclaimer" class="form-select">
+          <option value="true" selected>Yes</option>
+          <option value="false">No</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label for="dry_run" class="form-label">Dry Run</label>
+        <select id="dry_run" name="dry_run" class="form-select">
+          <option value="true" selected>Yes</option>
+          <option value="false">No (Live)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <button type="submit" class="btn btn-success" id="startBtn">Start</button>
+      <button type="button" class="btn btn-danger" id="stopBtn" disabled>Stop</button>
+    </div>
+  </form>
+
+  <h4>Status: <span id="status" class="running-badge">Idle</span></h4>
+
+  <div id="summaryContainer" style="display:none;">
+    <h5>Summary</h5>
+    <table class="table table-sm table-bordered" id="summaryTable">
+      <thead>
+        <tr><th>Subreddit</th><th>Posts</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
-  <script>
-    // incremental log rendering (no flicker)
-    let lastLogIndex = 0;
-    const MAX_ROWS = 500;
+  <h5>Logs</h5>
+  <table class="table table-sm table-striped log-table" id="logTable">
+    <thead>
+      <tr><th>Time</th><th>Level</th><th>Event</th><th>Details</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
 
-    function renderLogRow(r){
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${r.ts || ''}</td>
-        <td>${r.level || ''}</td>
-        <td>${r.event || ''}</td>
-        <td class="small">${formatDetails(r)}</td>
-      `;
-      return tr;
-    }
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script>
+function pollStatus() {
+  $.getJSON('/status', function(data) {
+    $('#status').text(data.running ? 'Running' : 'Idle')
+                .toggleClass('text-success', data.running)
+                .toggleClass('text-danger', !data.running);
+    $('#startBtn').prop('disabled', data.running);
+    $('#stopBtn').prop('disabled', !data.running);
 
-    // Presets loader
-    (function initPresets(){
-      const presetSel = document.getElementById('preset');
-      presetSel.addEventListener('change', async () => {
-        const p = presetSel.value;
-        if (!p) return;
-        try {
-          const res = await fetch('/presets.json');
-          const presets = await res.json();
-          const cfg = presets[p] || {};
-          if (cfg.brand) document.getElementById('brand').value = cfg.brand;
-          if (cfg.allowlist) document.getElementById('allowlist').value = (cfg.allowlist || []).join(', ');
-          if (cfg.brand_terms) document.getElementById('brand_terms').value = (cfg.brand_terms || []).join(', ');
-          if (cfg.generic_terms) document.getElementById('generic_terms').value = (cfg.generic_terms || []).join(', ');
-        } catch(e) { console.warn('preset load failed', e); }
+    const tbody = $('#logTable tbody');
+    tbody.empty();
+    (data.logs || []).slice(-50).reverse().forEach(log => {
+      const tr = $('<tr>');
+      tr.append($('<td>').text(log.ts));
+      tr.append($('<td>').text(log.level));
+      tr.append($('<td>').text(log.event));
+      tr.append($('<td>').text(JSON.stringify(log)));
+      tbody.append(tr);
+    });
+
+    if (data.summary && Object.keys(data.summary).length > 0) {
+      $('#summaryContainer').show();
+      const sbody = $('#summaryTable tbody').empty();
+      Object.entries(data.summary).forEach(([sub, count]) => {
+        sbody.append($('<tr>').append($('<td>').text(sub), $('<td>').text(count)));
       });
-    })();
-
-    async function startJob(){
-      const payload = {
-        message: document.getElementById('message').value,
-        brand: document.getElementById('brand').value,
-        ref_code: document.getElementById('ref_code').value,
-        discount: document.getElementById('discount').value,
-        ref_link: document.getElementById('ref_link').value,
-        brand_terms: document.getElementById('brand_terms').value,
-        generic_terms: document.getElementById('generic_terms').value,
-        allowlist: document.getElementById('allowlist').value,
-        days_back: document.getElementById('days_back').value,
-        per_sub_limit: document.getElementById('per_sub_limit').value,
-        max_total_posts: document.getElementById('max_total_posts').value,
-        posts_per_hour: document.getElementById('posts_per_hour').value,
-        jitter_seconds: document.getElementById('jitter_seconds').value,
-        duration_minutes: document.getElementById('duration_minutes').value,
-        only_megathreads: document.getElementById('only_megathreads').checked,
-        dry_run: document.getElementById('dry_run').checked,
-        tone: document.getElementById('tone').value,
-        emoji_level: document.getElementById('emoji_level').value,
-        add_disclaimer: document.getElementById('add_disclaimer').value === 'true',
-        random_seed: document.getElementById('random_seed').value,
-      };
-      toggleButtons({running:true});
-      const res = await fetch('/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-      if (!res.ok){
-        toggleButtons({running:false});
-        alert('Start failed: ' + (await res.text()));
-      }
     }
+  });
+}
 
-    async function stopJob(){
-      toggleButtons({stopping:true});
-      await fetch('/stop', {method:'POST'});
-      // worker will flip running=false; poller updates UI
-    }
+$('#startForm').submit(function(e) {
+  e.preventDefault();
+  $.post('/start', $(this).serialize(), function(resp) {
+    pollStatus();
+  });
+});
 
-    function toggleButtons(state){
-      const startBtn = document.getElementById('startBtn');
-      const stopBtn  = document.getElementById('stopBtn');
-      const runStatus = document.getElementById('runStatus');
-      if (state.running){
-        runStatus.className = 'pill badge badge-green'; runStatus.textContent = 'Running…';
-        startBtn.disabled = true; stopBtn.disabled = false;
-      } else if (state.stopping){
-        runStatus.className = 'pill badge badge-yellow'; runStatus.textContent = 'Stopping…';
-        startBtn.disabled = true; stopBtn.disabled = true;
-      } else {
-        runStatus.className = 'pill badge badge-red'; runStatus.textContent = 'Idle';
-        startBtn.disabled = false; stopBtn.disabled = true;
-      }
-    }
+$('#stopBtn').click(function() {
+  $.post('/stop', function() {
+    pollStatus();
+  });
+});
 
-    // Poll progress & logs
-    async function poll(){
-      try{
-        const res = await fetch('/progress');
-        const data = await res.json();
+setInterval(pollStatus, 3000);
+pollStatus();
+</script>
 
-        // status + buttons
-        const runStatus = document.getElementById('runStatus');
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn  = document.getElementById('stopBtn');
-        if (data.running){
-          runStatus.className = 'pill badge badge-green'; runStatus.textContent = 'Running…';
-          startBtn.disabled = true; stopBtn.disabled = false;
-        } else if (data.stop_requested){
-          runStatus.className = 'pill badge badge-yellow'; runStatus.textContent = 'Stopping…';
-          startBtn.disabled = true; stopBtn.disabled = true;
-        } else {
-          runStatus.className = 'pill badge badge-red'; runStatus.textContent = 'Idle';
-          startBtn.disabled = false; stopBtn.disabled = true;
-        }
-
-        // summary
-        const entries = Object.entries(data.summary || {});
-        const sumTxt = entries.length ? entries.map(([s,c])=>`${s}: ${c}`).join(', ') : '(none yet)';
-        document.getElementById('summaryBar').textContent = `Per-subreddit counts: ${sumTxt} — ` + (data.running ? 'Running' : 'Idle');
-
-        // logs (incremental to avoid flicker)
-        const body = document.getElementById('logBody');
-        const logs = data.logs || [];
-        const newItems = logs.slice(lastLogIndex);
-        if (lastLogIndex === 0 && logs.length > 0) {
-          const start = Math.max(0, logs.length - MAX_ROWS);
-          body.innerHTML = '';
-          for (let i = start; i < logs.length; i++) body.appendChild(renderLogRow(logs[i]));
-          lastLogIndex = logs.length;
-        } else if (newItems.length) {
-          const frag = document.createDocumentFragment();
-          newItems.forEach(r => frag.appendChild(renderLogRow(r)));
-          body.appendChild(frag);
-          lastLogIndex = logs.length;
-          while (body.rows.length > MAX_ROWS) body.deleteRow(0);
-        }
-      } catch(e){ /* ignore */ }
-      setTimeout(poll, 1000);
-    }
-
-    function formatDetails(r){
-      const parts = [];
-      if (r.sub) parts.push(`<b>${escapeHtml(r.sub)}</b>`);
-      if (r.title) parts.push(escapeHtml(r.title));
-      if (r.url) parts.push(`<a href="${escapeAttr(r.url)}" target="_blank">link</a>`);
-      if (r.comment_id) parts.push(`comment: ${escapeHtml(r.comment_id)}`);
-      if (r.error) parts.push(`<span style="color:#a40000">${escapeHtml(r.error)}</span>`);
-      if (r.seconds) parts.push(`sleep ${r.seconds}s`);
-      if (!parts.length && r.user) parts.push(`user: ${escapeHtml(r.user)}`);
-      return parts.join(' — ');
-    }
-    function escapeHtml(s){return String(s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}
-    function escapeAttr(s){return String(s||'').replace(/"/g,'&quot;')}
-
-    poll();
-  </script>
 </body>
 </html>
