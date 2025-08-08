@@ -1,61 +1,74 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Reddit Referral Poster (Pro v2, ToS-friendly, fixed)
-- OAuth web login (no password). Refresh token stored in memory for demo.
-- Drip scheduling and limits.
-- CSV export of logs.
-- Subreddit rule check: auto-skips subs forbidding referrals/self-promo; prefers megathreads or enforces megathread-only.
-- Presets for common programs.
-- Natural copy variation engine (openers/CTAs/closers/synonyms/tones/emojis/mod disclaimer).
-- Deployable to Render/Replit/Docker.
+Reddit Referral Poster — Pro v2.1
+
+- OAuth web login (Reddit "web app" credentials).
+- Drip scheduler: start immediately; stop after `duration_minutes`.
+- Rule checks: prefers megathreads; skips subs forbidding referrals.
+- Natural copy variation; auto-generates message when base text is empty.
+- CSV export; progress API includes "stopping" state.
+
+Environment variables (Render):
+  FLASK_SECRET
+  REDDIT_CLIENT_ID
+  REDDIT_CLIENT_SECRET
+  REDDIT_REDIRECT_URI   (e.g., https://reddit-ref-poster.onrender.com/oauth/callback)
+  USER_AGENT            (e.g., reddit-ref-poster v2 by u/YourUser)
 """
 
 import os
-import csv
 import io
+import csv
 import time
 import random
 import threading
 import datetime as dt
-from typing import List, Dict
+from typing import Dict, List
+
 from flask import (
     Flask, render_template, request, jsonify, redirect,
     url_for, session, Response, send_from_directory, abort
 )
 from flask_cors import CORS
-import praw
-import prawcore  # <— modern prawcore import (no Unauthorized symbol)
 
-# ---- Configuration via env ----
+import praw
+import prawcore  # modern prawcore (no Unauthorized symbol)
+
+# -------------------- Config --------------------
+
 SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
 REDDIT_CLIENT_ID = os.environ.get("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET", "")
 REDDIT_REDIRECT_URI = os.environ.get("REDDIT_REDIRECT_URI", "http://localhost:5000/oauth/callback")
-DEFAULT_USER_AGENT = os.environ.get("USER_AGENT", "referral-poster-pro v2 by u/yourname")
+DEFAULT_USER_AGENT = os.environ.get("USER_AGENT", "reddit-ref-poster v2 by u/example")
 
 app = Flask(__name__)
 app.secret_key = SECRET
 CORS(app)
 
-# ---- In-memory state (demo) ----
-STATE = {
+# -------------------- State --------------------
+
+STATE: Dict = {
     "refresh_token": None,
     "running": False,
     "stop_requested": False,
     "logs": [],
-    "summary": {},
+    "summary": {},            # per-subreddit counts
     "last_login_user": None,
 }
 
 def _log(level: str, event: str, **kwargs):
-    entry = {"level": level, "event": event, "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}
+    entry = {"level": level, "event": event, "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
     entry.update(kwargs)
     STATE["logs"].append(entry)
+    # keep last ~2000 lines
     if len(STATE["logs"]) > 2000:
         STATE["logs"] = STATE["logs"][-2000:]
 
-# ---- Rules heuristics ----
+
+# -------------------- Heuristics / Presets --------------------
+
 PROHIBIT_PATTERNS = [
     "no referrals", "no referral", "no codes", "no promo codes",
     "no self-promotion", "no self promotion", "referrals not allowed",
@@ -74,6 +87,7 @@ DEFAULT_GENERIC_QUERIES = [
     "referral", "referrals", "referral code", "referral codes",
     "promo code", "promocodes", "coupon code", "megathread", "weekly megathread"
 ]
+
 PRESETS = {
     "gopuff": {
         "brand": "gopuff",
@@ -105,43 +119,21 @@ PRESETS = {
         "allowlist": DEFAULT_ALLOWLIST,
         "generic_terms": DEFAULT_GENERIC_QUERIES,
     },
-    "uber": {
-        "brand": "uber",
-        "brand_terms": ["uber", "ride share", "rideshare"],
-        "allowlist": DEFAULT_ALLOWLIST,
-        "generic_terms": DEFAULT_GENERIC_QUERIES,
-    },
-    "lyft": {
-        "brand": "lyft",
-        "brand_terms": ["lyft", "ride share", "rideshare"],
-        "allowlist": DEFAULT_ALLOWLIST,
-        "generic_terms": DEFAULT_GENERIC_QUERIES,
-    },
 }
 
-# ---- Reddit client ----
+# -------------------- Reddit client --------------------
+
 def build_reddit(read_only=False) -> praw.Reddit:
-    """Create a Reddit instance using refresh_token if available; else read-only.
-    For posting, refresh_token is required.
-    """
+    kwargs = dict(
+        client_id=REDDIT_CLIENT_ID,
+        client_secret=REDDIT_CLIENT_SECRET,
+        user_agent=DEFAULT_USER_AGENT,
+        redirect_uri=REDDIT_REDIRECT_URI,
+        ratelimit_seconds=5,
+    )
     if STATE["refresh_token"] and not read_only:
-        reddit = praw.Reddit(
-            client_id=REDDIT_CLIENT_ID,
-            client_secret=REDDIT_CLIENT_SECRET,
-            user_agent=DEFAULT_USER_AGENT,
-            redirect_uri=REDDIT_REDIRECT_URI,
-            refresh_token=STATE["refresh_token"],
-            ratelimit_seconds=5,
-        )
-    else:
-        reddit = praw.Reddit(
-            client_id=REDDIT_CLIENT_ID,
-            client_secret=REDDIT_CLIENT_SECRET,
-            user_agent=DEFAULT_USER_AGENT,
-            redirect_uri=REDDIT_REDIRECT_URI,
-            ratelimit_seconds=5,
-        )
-    return reddit
+        kwargs["refresh_token"] = STATE["refresh_token"]
+    return praw.Reddit(**kwargs)
 
 def is_megathread_title(title: str) -> bool:
     t = (title or "").lower()
@@ -152,23 +144,24 @@ def rules_disallow_referrals(subreddit) -> (bool, bool, str):
     try:
         text_blobs = []
         for r in subreddit.rules():
-            text_blobs.append((r.short_name or "") + " " + (r.description or ""))
+            text_blobs.append(f"{r.short_name or ''} {r.description or ''}")
         about = subreddit.description or ""
         text_blobs.append(about)
         blob = " ".join(text_blobs).lower()
 
         disallow = any(pat in blob for pat in PROHIBIT_PATTERNS)
         mega_only = any(pat in blob for pat in MEGATHREAD_REQUIRED_PATTERNS)
-        memo = "rules_checked"
-        return disallow, mega_only, memo
+        return disallow, mega_only, "rules_checked"
     except Exception as e:
         return False, False, f"rules_error:{e!r}"
 
-def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[str], allowlist: List[str], days_back: int):
+def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[str],
+                           allowlist: List[str], days_back: int):
+    """Yield (sub_name, submission, disallow, mega_only)"""
     cutoff = time.time() - days_back * 86400
     seen = set()
 
-    # 1) allowlist first
+    # 1) Search allowlisted subs first
     for s in allowlist:
         try:
             sr = reddit.subreddit(s)
@@ -176,44 +169,40 @@ def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[s
             q_terms = brand_terms + generic_terms
             query = " OR ".join([f'title:"{t}"' for t in q_terms if t])
             for subm in sr.search(query or "referral", sort="new", time_filter="year", limit=50):
-                if subm.created_utc < cutoff:
-                    continue
-                if (s, subm.id) in seen:
-                    continue
+                if subm.created_utc < cutoff: continue
+                if (s, subm.id) in seen: continue
                 seen.add((s, subm.id))
                 title = (subm.title or "").lower()
-                if any(t in title for t in ["referral", "referrals", "promo", "code", "coupon", "discount", "megathread"]):
+                if any(k in title for k in ["referral", "referrals", "promo", "code", "coupon", "discount", "megathread"]):
                     yield (s, subm, disallow, mega_only)
         except Exception as e:
             _log("warn", "allowlist_search_error", sub=s, error=repr(e))
 
-    # 2) discovery
-    discovery_queries = list(dict.fromkeys(brand_terms + generic_terms))
-    for q in discovery_queries:
+    # 2) Discovery by brand/generic terms
+    discovery = list(dict.fromkeys(brand_terms + generic_terms))
+    for q in discovery:
         try:
             for sr in reddit.subreddits.search(q, limit=25):
                 s = sr.display_name
                 if any(s.lower() == a.lower() for a in allowlist):
                     continue
                 disallow, mega_only, _ = rules_disallow_referrals(sr)
-                q_terms = brand_terms + generic_terms
-                query = " OR ".join([f'title:"{t}"' for t in q_terms if t])
+                query = " OR ".join([f'title:"{t}"' for t in (brand_terms + generic_terms) if t])
                 try:
                     for subm in sr.search(query or "referral", sort="new", time_filter="year", limit=25):
-                        if subm.created_utc < cutoff:
-                            continue
-                        if (s, subm.id) in seen:
-                            continue
+                        if subm.created_utc < cutoff: continue
+                        if (s, subm.id) in seen: continue
                         seen.add((s, subm.id))
                         title = (subm.title or "").lower()
-                        if any(t in title for t in ["referral", "referrals", "promo", "code", "coupon", "discount", "megathread"]):
+                        if any(k in title for k in ["referral", "referrals", "promo", "code", "coupon", "discount", "megathread"]):
                             yield (s, subm, disallow, mega_only)
                 except Exception as inner:
                     _log("warn", "subreddit_search_error", sub=s, error=repr(inner))
         except Exception as e:
             _log("warn", "discovery_error", query=q, error=repr(e))
 
-# ---- Natural Copy Variation Engine ----
+# -------------------- Copy variation engine --------------------
+
 SYNONYMS = {
     "hey": ["Hey", "Hi", "Hello", "Quick heads-up:", "FYI:"],
     "delivers": ["delivers", "brings", "drops off"],
@@ -262,15 +251,12 @@ def spin_template(tmpl: str, brand: str, code: str, link: str, discount: int) ->
         discount=discount,
     )
 
-def generate_variant(base_message: str, brand: str, code: str, link: str, discount: int,
+def generate_variant(base: str, brand: str, code: str, link: str, discount: int,
                      tone: str, emoji_level: str, add_disclaimer: bool) -> str:
     parts = []
+    if base.strip():
+        parts.append(base.strip())
 
-    # 40% chance to include base message at top
-    if random.random() < 0.4 and (base_message or "").strip():
-        parts.append(base_message.strip())
-
-    # Opener + CTA + Closer
     opener = spin_template(random.choice(OPENERS), brand, code, link, discount)
     cta = spin_template(random.choice(CTA_TEMPLATES), brand, code, link, discount)
     closer = spin_template(random.choice(CLOSERS), brand, code, link, discount)
@@ -279,7 +265,7 @@ def generate_variant(base_message: str, brand: str, code: str, link: str, discou
         msg = f"{cta}\n\n{link}"
     elif tone == "friendly":
         msg = f"{opener}\n\n{cta}\n\n{closer}"
-    else:  # helpful
+    else:
         msg = (
             f"{opener}\n\n{cta}\n\n"
             f"If you don’t see the code field, sign up first, then add it {spin_piece('at_checkout')}. {closer}"
@@ -301,7 +287,8 @@ def generate_variant(base_message: str, brand: str, code: str, link: str, discou
 
     return final.strip()
 
-# ---- Worker ----
+# -------------------- Worker --------------------
+
 def drip_worker(config: Dict):
     STATE["running"] = True
     STATE["stop_requested"] = False
@@ -328,8 +315,8 @@ def drip_worker(config: Dict):
             STATE["running"] = False
             return
 
-        # Inputs
-        base_message = config.get("message", "")
+        # --- Inputs ---
+        base_message = (config.get("message") or "").strip()
         brand = (config.get("brand") or "").strip()
         code = (config.get("ref_code") or "").strip()
         link = (config.get("ref_link") or "").strip()
@@ -338,8 +325,8 @@ def drip_worker(config: Dict):
         except Exception:
             discount = 0
 
-        tone = config.get("tone", "friendly")          # concise | friendly | helpful
-        emoji_level = config.get("emoji_level", "low") # none | low | normal
+        tone = config.get("tone", "friendly")
+        emoji_level = config.get("emoji_level", "low")
         add_disclaimer = bool(config.get("add_disclaimer", True))
 
         brand_terms = [t.strip() for t in (config.get("brand_terms") or "").split(",") if t.strip()]
@@ -356,24 +343,22 @@ def drip_worker(config: Dict):
         cadence_seconds = max(10, int(3600 / posts_per_hour))
         jitter = int(config.get("jitter_seconds", 30))
 
-        start_at_iso = config.get("start_at")
-        end_at_iso = config.get("end_at")
-        start_at = dt.datetime.fromisoformat(start_at_iso) if start_at_iso else dt.datetime.now()
-        end_at = dt.datetime.fromisoformat(end_at_iso) if end_at_iso else None
+        # Start NOW, end after duration_minutes
+        duration_minutes = int(config.get("duration_minutes", 60))
+        start_at = dt.datetime.utcnow()
+        end_at = start_at + dt.timedelta(minutes=duration_minutes)
 
         only_megathreads = bool(config.get("only_megathreads", True))
         dry_run = bool(config.get("dry_run", False))
 
+        # --- Main loop ---
         while True:
             if STATE["stop_requested"]:
                 _log("warn", "stop_requested")
                 break
 
-            now = dt.datetime.now()
-            if now < start_at:
-                time.sleep(1)
-                continue
-            if end_at and now > end_at:
+            now = dt.datetime.utcnow()
+            if now > end_at:
                 _log("info", "end_time_reached")
                 break
 
@@ -399,14 +384,19 @@ def drip_worker(config: Dict):
                 time.sleep(5)
                 continue
 
-            # Pick one
             s, submission = random.choice(candidates)
-            key = f"{s}_{submission.id}"
-            seen_targets[key] = True
+            seen_targets[f"{s}_{submission.id}"] = True
 
             try:
                 title = submission.title
-                msg = generate_variant(base_message, brand, code, link, discount, tone, emoji_level, add_disclaimer)
+
+                # Build message (auto-generate when base is empty)
+                if base_message:
+                    msg = generate_variant(base_message, brand, code, link, discount, tone, emoji_level, add_disclaimer)
+                else:
+                    seed = f"{brand} referral"
+                    msg = generate_variant(seed, brand, code, link, discount, tone, emoji_level, add_disclaimer)
+
                 if dry_run:
                     _log("info", "dry_run_match", sub=s, title=title, url=f"https://www.reddit.com{submission.permalink}")
                 else:
@@ -414,11 +404,14 @@ def drip_worker(config: Dict):
                     posted += 1
                     per_sub_counts[s] = per_sub_counts.get(s, 0) + 1
                     STATE["summary"][s] = per_sub_counts[s]
-                    _log("success", "comment_posted", sub=s, title=title, comment_id=reply.id, url=f"https://www.reddit.com{reply.permalink}")
+                    _log("success", "comment_posted", sub=s, title=title,
+                         comment_id=getattr(reply, "id", "?"),
+                         url=f"https://www.reddit.com{getattr(reply, 'permalink', '')}")
 
                 if posted >= max_total_posts and not dry_run:
                     _log("info", "total_cap_reached", count=posted)
                     break
+
             except Exception as e:
                 _log("error", "post_failed", sub=s, title=title, error=repr(e))
 
@@ -430,7 +423,9 @@ def drip_worker(config: Dict):
         STATE["running"] = False
         _log("info", "job_done", running=False)
 
-# ---- Routes ----
+
+# -------------------- Routes --------------------
+
 @app.route("/")
 def index():
     presets = sorted(PRESETS.keys())
@@ -491,8 +486,9 @@ def start():
         return jsonify({"ok": False, "error": "Not logged in via Reddit OAuth."}), 401
 
     data = request.json or {}
-    if not data.get("message"):
-        return jsonify({"ok": False, "error": "Missing field: message"}), 400
+    # Allow empty message; worker will auto-generate
+    for k in ["message", "brand", "ref_code", "ref_link", "discount"]:
+        data.setdefault(k, "")
 
     t = threading.Thread(target=drip_worker, args=(data,), daemon=True)
     t.start()
@@ -507,6 +503,7 @@ def stop():
 def progress():
     return jsonify({
         "running": STATE["running"],
+        "stop_requested": STATE["stop_requested"],
         "logs": STATE["logs"],
         "summary": STATE["summary"],
         "user": STATE.get("last_login_user"),
