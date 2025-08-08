@@ -22,7 +22,7 @@ from urllib.parse import urlencode
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, Response, send_from_directory, abort
 from flask_cors import CORS
 import praw
-from prawcore import Unauthorized
+import prawcore
 
 # ---- Configuration via env ----
 SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
