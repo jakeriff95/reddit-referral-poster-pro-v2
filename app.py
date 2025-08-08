@@ -314,19 +314,19 @@ def drip_worker(config: Dict):
     seen_targets = {}
     per_sub_counts = {}
 
-    try:
-        if config.get("random_seed"):
-            random.seed(int(config["random_seed"]))
+try:
+    me = str(reddit.user.me())
+    STATE["last_login_user"] = me
+    _log("info", "auth_ok", user=me)
+except prawcore.exceptions.OAuthException as e:
+    _log("error", "auth_failed", reason="OAuthException", detail=str(e))
+    STATE["running"] = False
+    return
+except prawcore.exceptions.PrawcoreException as e:
+    _log("error", "auth_failed", reason="PrawcoreException", detail=str(e))
+    STATE["running"] = False
+    return
 
-        reddit = build_reddit(read_only=False)
-        try:
-            me = str(reddit.user.me())
-            STATE["last_login_user"] = me
-            _log("info", "auth_ok", user=me)
-        except Unauthorized:
-            _log("error", "auth_failed", reason="No valid refresh token")
-            STATE["running"] = False
-            return
 
         # Inputs
         base_message = config["message"]
