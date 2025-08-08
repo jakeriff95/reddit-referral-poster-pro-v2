@@ -5,7 +5,7 @@
   <title>Reddit Referral Poster — Pro v2.1</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root{--fg:#111;--muted:#666;--bg:#fff;--line:#e7e7e7;--pri:#0a7;--warn:#a87000;--err:#a40000}
+    :root{--fg:#111;--muted:#666;--bg:#fff;--line:#e7e7e7}
     html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial}
     .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
     h1{display:flex;align-items:center;gap:.6rem;margin:0 0 8px}
@@ -18,22 +18,20 @@
     }
     textarea{min-height:110px;resize:vertical}
     .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr; gap:12px}
-    .grid-2{display:grid;grid-template-columns:1fr 1fr; gap:12px}
     .btn{cursor:pointer;border:1px solid var(--line);background:#f7f7f7;border-radius:8px;padding:8px 12px}
     .btn:disabled{opacity:.55;cursor:not-allowed}
     .btn-primary{background:#0a7; color:white; border-color:#0a7}
     .btn-danger{background:#c83; color:white; border-color:#c83}
     .toolbar{display:flex;align-items:center;gap:8px;margin:8px 0 16px}
     .muted{color:var(--muted)}
-    table{width:100%;border-collapse:collapse}
-    th,td{border-top:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+    table{width:100%;border-collapse:collapse;table-layout:fixed}
+    th,td{border-top:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;word-wrap:break-word}
     th{font-size:.9rem;color:#333;background:#fafafa}
     .badge{display:inline-block;padding:.25rem .5rem;border-radius:.5rem;font-weight:700}
     .badge-green{background:#e6f7ec;color:#0a7}
     .badge-yellow{background:#fff7e6;color:#a87000}
     .badge-red{background:#ffecec;color:#a40000}
     .pill{font-size:.85rem}
-    .right{display:flex;gap:8px;align-items:center}
     .small{font-size:.9rem}
   </style>
 </head>
@@ -72,7 +70,7 @@
             {% endfor %}
           </select>
         </div>
-        <div class="right">
+        <div class="row" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
           <div>
             <label for="tone">Tone</label>
             <select id="tone">
@@ -203,6 +201,21 @@
   </div>
 
   <script>
+    // incremental log rendering (no flicker)
+    let lastLogIndex = 0;
+    const MAX_ROWS = 500;
+
+    function renderLogRow(r){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${r.ts || ''}</td>
+        <td>${r.level || ''}</td>
+        <td>${r.event || ''}</td>
+        <td class="small">${formatDetails(r)}</td>
+      `;
+      return tr;
+    }
+
     // Presets loader
     (function initPresets(){
       const presetSel = document.getElementById('preset');
@@ -236,7 +249,7 @@
         max_total_posts: document.getElementById('max_total_posts').value,
         posts_per_hour: document.getElementById('posts_per_hour').value,
         jitter_seconds: document.getElementById('jitter_seconds').value,
-        duration_minutes: document.getElementById('duration_minutes').value, // NEW
+        duration_minutes: document.getElementById('duration_minutes').value,
         only_megathreads: document.getElementById('only_megathreads').checked,
         dry_run: document.getElementById('dry_run').checked,
         tone: document.getElementById('tone').value,
@@ -255,7 +268,7 @@
     async function stopJob(){
       toggleButtons({stopping:true});
       await fetch('/stop', {method:'POST'});
-      // The worker will flip running=false; poller will update UI.
+      // worker will flip running=false; poller updates UI
     }
 
     function toggleButtons(state){
@@ -279,10 +292,11 @@
       try{
         const res = await fetch('/progress');
         const data = await res.json();
+
+        // status + buttons
         const runStatus = document.getElementById('runStatus');
         const startBtn = document.getElementById('startBtn');
         const stopBtn  = document.getElementById('stopBtn');
-
         if (data.running){
           runStatus.className = 'pill badge badge-green'; runStatus.textContent = 'Running…';
           startBtn.disabled = true; stopBtn.disabled = false;
@@ -299,21 +313,24 @@
         const sumTxt = entries.length ? entries.map(([s,c])=>`${s}: ${c}`).join(', ') : '(none yet)';
         document.getElementById('summaryBar').textContent = `Per-subreddit counts: ${sumTxt} — ` + (data.running ? 'Running' : 'Idle');
 
-        // logs table
+        // logs (incremental to avoid flicker)
         const body = document.getElementById('logBody');
-        body.innerHTML = '';
-        (data.logs || []).slice(-200).forEach(row=>{
-          const tr = document.createElement('tr');
-          tr.innerHTML = `
-            <td>${row.ts || ''}</td>
-            <td>${row.level || ''}</td>
-            <td>${row.event || ''}</td>
-            <td class="small">${formatDetails(row)}</td>
-          `;
-          body.appendChild(tr);
-        });
+        const logs = data.logs || [];
+        const newItems = logs.slice(lastLogIndex);
+        if (lastLogIndex === 0 && logs.length > 0) {
+          const start = Math.max(0, logs.length - MAX_ROWS);
+          body.innerHTML = '';
+          for (let i = start; i < logs.length; i++) body.appendChild(renderLogRow(logs[i]));
+          lastLogIndex = logs.length;
+        } else if (newItems.length) {
+          const frag = document.createDocumentFragment();
+          newItems.forEach(r => frag.appendChild(renderLogRow(r)));
+          body.appendChild(frag);
+          lastLogIndex = logs.length;
+          while (body.rows.length > MAX_ROWS) body.deleteRow(0);
+        }
       } catch(e){ /* ignore */ }
-      setTimeout(poll, 1500);
+      setTimeout(poll, 1000);
     }
 
     function formatDetails(r){
