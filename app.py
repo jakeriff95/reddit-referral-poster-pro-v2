@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Reddit Referral Poster — Pro v2.1 (responsive stop + UI sync)
+Reddit Referral Poster — Pro v2.2 (US focus + responsive Stop)
 
-- OAuth web login (Reddit "web app" credentials).
 - Starts immediately; ends after `duration_minutes`.
-- Rule checks: prefers megathreads; skips subs forbidding referrals.
-- Auto-generates message when base text is empty; copy variation engine.
+- US-only region filter (heuristic): prefers $ / “US/USA/United States”, skips UK/CA/AU/EU cues.
+- Safer Stop: interruptible sleeps; UI state is poll-driven.
+- Auto-generates message if base text is empty; copy variation engine.
 - CSV export; progress API includes "stop_requested".
 """
 
@@ -17,7 +17,7 @@ import time
 import random
 import threading
 import datetime as dt
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from flask import (
     Flask, render_template, request, jsonify, redirect,
@@ -126,11 +126,18 @@ def build_reddit(read_only=False) -> praw.Reddit:
         kwargs["refresh_token"] = STATE["refresh_token"]
     return praw.Reddit(**kwargs)
 
-def is_megathread_title(title: str) -> bool:
-    t = (title or "").lower()
-    return "megathread" in t or ("weekly" in t and "thread" in t)
+def is_megathread(submission) -> bool:
+    title = (getattr(submission, "title", "") or "").lower()
+    flair = (getattr(submission, "link_flair_text", "") or "").lower()
+    if getattr(submission, "stickied", False):
+        return True
+    if "megathread" in title or ("weekly" in title and "thread" in title):
+        return True
+    if flair and any(k in flair for k in ["referral", "referrals", "megathread"]):
+        return True
+    return False
 
-def rules_disallow_referrals(subreddit) -> (bool, bool, str):
+def rules_disallow_referrals(subreddit) -> Tuple[bool, bool, str]:
     """Return (disallowed, megathread_only, memo)."""
     try:
         text_blobs = []
@@ -146,11 +153,40 @@ def rules_disallow_referrals(subreddit) -> (bool, bool, str):
     except Exception as e:
         return False, False, f"rules_error:{e!r}"
 
+# -------------------- Region filter (US) --------------------
+
+US_POS = [" us ", " usa ", " united states", "$", "usd"]
+NON_US_NEG = [" uk ", " united kingdom", " gb ", " canada", " ca ", " australia", " au ",
+              " eu ", " europe", " €", " eur", " £", " gbp", " cad", " aud"]
+
+def passes_region_us(subreddit, submission) -> bool:
+    """Heuristic: prefer US; skip obvious non-US. Checks title, flair, subreddit desc."""
+    try:
+        title = (submission.title or "").lower()
+    except Exception:
+        title = ""
+    flair = (getattr(submission, "link_flair_text", "") or "").lower()
+    about = (getattr(subreddit, "description", "") or "").lower()
+
+    txt = f" {title} {flair} {about} "
+    if any(tok in txt for tok in NON_US_NEG):
+        return False
+    if any(tok in txt for tok in US_POS):
+        return True
+    return True  # default allow unless clearly non-US
+
+# -------------------- Search --------------------
+
 def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[str],
-                           allowlist: List[str], days_back: int):
+                           allowlist: List[str], days_back: int, region: str):
     """Yield (sub_name, submission, disallow, mega_only)"""
     cutoff = time.time() - days_back * 86400
     seen = set()
+
+    def region_ok(sr, subm) -> bool:
+        if region.lower() == "us":
+            return passes_region_us(sr, subm)
+        return True
 
     # 1) Search allowlisted subs first
     for s in allowlist:
@@ -160,8 +196,13 @@ def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[s
             q_terms = brand_terms + generic_terms
             query = " OR ".join([f'title:"{t}"' for t in q_terms if t])
             for subm in sr.search(query or "referral", sort="new", time_filter="year", limit=50):
-                if subm.created_utc < cutoff: continue
-                if (s, subm.id) in seen: continue
+                if subm.created_utc < cutoff:
+                    continue
+                if (s, subm.id) in seen:
+                    continue
+                if not region_ok(sr, subm):
+                    _log("info", "skip_region", sub=s, title=subm.title)
+                    continue
                 seen.add((s, subm.id))
                 title = (subm.title or "").lower()
                 if any(k in title for k in ["referral", "referrals", "promo", "code", "coupon", "discount", "megathread"]):
@@ -181,8 +222,13 @@ def find_candidate_threads(reddit, brand_terms: List[str], generic_terms: List[s
                 query = " OR ".join([f'title:"{t}"' for t in (brand_terms + generic_terms) if t])
                 try:
                     for subm in sr.search(query or "referral", sort="new", time_filter="year", limit=25):
-                        if subm.created_utc < cutoff: continue
-                        if (s, subm.id) in seen: continue
+                        if subm.created_utc < cutoff:
+                            continue
+                        if (s, subm.id) in seen:
+                            continue
+                        if not region_ok(sr, subm):
+                            _log("info", "skip_region", sub=s, title=subm.title)
+                            continue
                         seen.add((s, subm.id))
                         title = (subm.title or "").lower()
                         if any(k in title for k in ["referral", "referrals", "promo", "code", "coupon", "discount", "megathread"]):
@@ -274,7 +320,7 @@ def generate_variant(base: str, brand: str, code: str, link: str, discount: int,
         if random.random() < 0.2: final += " 🚚"
     return final.strip()
 
-# -------------------- Worker (interruptible sleep) --------------------
+# -------------------- Sleep helper --------------------
 
 def _interruptible_sleep(seconds: int) -> bool:
     """Sleep up to `seconds`, checking stop flag every 1s.
@@ -284,6 +330,8 @@ def _interruptible_sleep(seconds: int) -> bool:
             return True
         time.sleep(1)
     return False
+
+# -------------------- Worker --------------------
 
 def drip_worker(config: Dict):
     STATE["running"] = True
@@ -339,13 +387,13 @@ def drip_worker(config: Dict):
         cadence_seconds = max(10, int(3600 / posts_per_hour))
         jitter = int(config.get("jitter_seconds", 30))
 
-        # Start NOW, end after duration_minutes
         duration_minutes = int(config.get("duration_minutes", 60))
         start_at = dt.datetime.utcnow()
         end_at = start_at + dt.timedelta(minutes=duration_minutes)
 
         only_megathreads = bool(config.get("only_megathreads", True))
         dry_run = bool(config.get("dry_run", False))
+        region = (config.get("region") or "US").upper()
 
         # --- Main loop ---
         while True:
@@ -361,12 +409,12 @@ def drip_worker(config: Dict):
             # Gather candidates
             candidates = []
             for s, submission, disallow, mega_only in find_candidate_threads(
-                reddit, brand_terms, generic_terms, allowlist, days_back
+                reddit, brand_terms, generic_terms, allowlist, days_back, region
             ):
                 if disallow:
                     _log("info", "skip_rules_disallow", sub=s, title=submission.title)
                     continue
-                if (only_megathreads or mega_only) and not is_megathread_title(submission.title):
+                if (only_megathreads or mega_only) and not is_megathread(submission):
                     _log("info", "skip_not_megathread", sub=s, title=submission.title)
                     continue
                 if per_sub_counts.get(s, 0) >= per_sub_limit:
@@ -387,7 +435,6 @@ def drip_worker(config: Dict):
 
             try:
                 title = submission.title
-
                 # Build message (auto-generate when base is empty)
                 if base_message:
                     msg = generate_variant(base_message, brand, code, link, discount, tone, emoji_level, add_disclaimer)
@@ -488,6 +535,8 @@ def start():
     # Allow empty message; worker will auto-generate
     for k in ["message", "brand", "ref_code", "ref_link", "discount"]:
         data.setdefault(k, "")
+    # Default region
+    data["region"] = (data.get("region") or "US").upper()
 
     t = threading.Thread(target=drip_worker, args=(data,), daemon=True)
     t.start()
